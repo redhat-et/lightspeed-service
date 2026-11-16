@@ -1,6 +1,7 @@
 """Unit tests for DocsSummarizer PR2 class."""
 
 import logging
+from contextlib import contextmanager
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
@@ -29,6 +30,7 @@ from ols.src.query_helpers.docs_summarizer import (  # noqa: E402
     DocsSummarizer,
     QueryHelper,
 )
+from ols.src.rag_index.solr_support import RetrievedChunk  # noqa: E402
 from ols.src.tools.tool_result_inspection import (  # noqa: E402
     ToolResultInspectionError,
 )
@@ -460,6 +462,141 @@ async def test_resolve_tools_appends_openshift_docs_tool_when_solr_configured_no
             config._solr_hybrid_initialized = False
     assert [t.name for t in tools] == ["search_openshift_documentation"]
     m_get.assert_awaited_once()
+
+
+@contextmanager
+def _solr_pre_retrieval_source(
+    search: AsyncMock | None = None, pre_retrieval: bool = True
+):
+    """Patch Solr hybrid config and search client for pre-retrieval tests."""
+    client = MagicMock()
+    client.search = search or AsyncMock(return_value=[])
+    hybrid = SolrHybridSettings(pre_retrieval=pre_retrieval)
+    with (
+        patch.object(config.ols_config, "solr_hybrid", hybrid),
+        patch.object(
+            AppConfig, "solr_hybrid_search", PropertyMock(return_value=client)
+        ),
+    ):
+        yield client
+
+
+def test_pre_retrieval_disabled_by_default():
+    """Pre-retrieval stays off unless explicitly configured."""
+    summarizer = DocsSummarizer(llm_loader=mock_llm_loader(None))
+    assert summarizer._pre_retrieval_enabled is False
+
+
+def test_pre_retrieval_enabled_in_ask_mode():
+    """Pre-retrieval is active in ask mode when Solr hybrid enables it."""
+    with _solr_pre_retrieval_source():
+        summarizer = DocsSummarizer(llm_loader=mock_llm_loader(None))
+    assert summarizer._pre_retrieval_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_pre_retrieve_docs_uses_round_budget():
+    """Retrieval receives the configured query and the per-round tool budget."""
+    chunk = RetrievedChunk(
+        text="passage one",
+        score=1.5,
+        metadata={"title": "Install", "docs_url": "https://docs/1"},
+    )
+    search = AsyncMock(return_value=[chunk])
+    with _solr_pre_retrieval_source(search):
+        summarizer = DocsSummarizer(llm_loader=mock_llm_loader(None))
+    chunks = await summarizer._pre_retrieve_docs("install a cluster")
+    assert chunks == [chunk]
+    assert search.await_args.args[0] == "install a cluster"
+    assert (
+        search.await_args.kwargs["token_budget"]
+        == summarizer._tracker.tools_round_budget
+    )
+
+
+def test_pre_retrieved_chunks_carry_source_and_stop_at_budget():
+    """Passages keep title and URL and are dropped when the prompt budget runs out."""
+    chunk = RetrievedChunk(
+        text="passage",
+        score=2.0,
+        metadata={"title": "Install", "docs_url": "https://docs/1"},
+    )
+    with _solr_pre_retrieval_source():
+        summarizer = DocsSummarizer(llm_loader=mock_llm_loader(None))
+    rag_chunks = summarizer._pre_retrieved_to_rag_chunks([chunk, chunk])
+    assert len(rag_chunks) == 2
+    assert rag_chunks[0].text.startswith('From document "Install" (https://docs/1)')
+    assert rag_chunks[0].doc_title == "Install"
+    assert rag_chunks[0].doc_url == "https://docs/1"
+    assert summarizer._tracker.usage(TokenCategory.RAG) == 2 * (
+        summarizer._tracker.count_tokens(rag_chunks[0].text)
+    )
+
+    summarizer._tracker.charge(
+        TokenCategory.PROMPT, summarizer._tracker.prompt_budget - 1
+    )
+    assert summarizer._pre_retrieved_to_rag_chunks([chunk]) == []
+
+
+@pytest.mark.asyncio
+async def test_pre_retrieval_suppresses_docs_tool_when_chunks_found():
+    """With pre-retrieved context, the docs tool is not offered to the model."""
+    chunk = RetrievedChunk(
+        text="passage",
+        score=1.0,
+        metadata={"title": "Install", "docs_url": "https://docs/1"},
+    )
+    search = AsyncMock(return_value=[chunk])
+    with (
+        _solr_pre_retrieval_source(search),
+        patch(
+            "ols.src.query_helpers.docs_summarizer.get_mcp_tools",
+            new_callable=AsyncMock,
+        ) as mock_get_mcp_tools,
+    ):
+        mock_get_mcp_tools.side_effect = lambda *args, **kwargs: []
+        summarizer = DocsSummarizer(llm_loader=mock_llm_loader(None))
+        summarizer._tracker.context_window_size = 65536
+        async for _ in summarizer.generate_response("install a cluster"):
+            pass
+        assert summarizer._docs_tool_suppressed is True
+        tools = await summarizer._resolve_tools_for_request("install a cluster")
+    assert tools == []
+
+
+@pytest.mark.asyncio
+async def test_pre_retrieval_falls_back_to_docs_tool_without_hits():
+    """An empty retrieval keeps the docs tool so the model can still search."""
+    search = AsyncMock(return_value=[])
+    with (
+        _solr_pre_retrieval_source(search),
+        patch(
+            "ols.src.query_helpers.docs_summarizer.get_mcp_tools",
+            new_callable=AsyncMock,
+        ) as mock_get_mcp_tools,
+    ):
+        mock_get_mcp_tools.side_effect = lambda *args, **kwargs: []
+        summarizer = DocsSummarizer(llm_loader=mock_llm_loader(None))
+        summarizer._tracker.context_window_size = 65536
+        async for _ in summarizer.generate_response("install a cluster"):
+            pass
+        assert summarizer._docs_tool_suppressed is False
+        tools = await summarizer._resolve_tools_for_request("install a cluster")
+    assert [t.name for t in tools] == ["search_openshift_documentation"]
+
+
+@pytest.mark.asyncio
+async def test_pre_retrieval_skipped_when_retriever_supplied():
+    """A configured RAG retriever takes precedence over Solr pre-retrieval."""
+    search = AsyncMock(return_value=[])
+    with _solr_pre_retrieval_source(search):
+        summarizer = DocsSummarizer(llm_loader=mock_llm_loader(None))
+        summarizer._tracker.context_window_size = 65536
+        async for _ in summarizer.generate_response(
+            "install a cluster", rag_retriever=MockRetriever()
+        ):
+            pass
+    search.assert_not_awaited()
 
 
 @pytest.mark.asyncio

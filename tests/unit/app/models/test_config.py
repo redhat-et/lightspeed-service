@@ -2346,6 +2346,27 @@ def test_ols_config_solr_hybrid_parses_from_yaml_dict():
     assert ols_config.solr_hybrid is not None
     assert ols_config.solr_hybrid.solr_http_base == "https://solr.example.com:8983"
     assert ols_config.solr_hybrid.max_results == 7
+    assert ols_config.solr_hybrid.pre_retrieval is False
+
+
+def test_ols_config_solr_hybrid_parses_pre_retrieval_flag():
+    """``solr_hybrid.pre_retrieval`` is parsed when set to true."""
+    base = {
+        "default_provider": "p",
+        "default_model": "m",
+        "conversation_cache": {"type": "memory", "memory": {"max_entries": 10}},
+    }
+    ols_config = OLSConfig(
+        {
+            **base,
+            "solr_hybrid": {
+                "solr_http_base": "https://solr.example.com:8983",
+                "pre_retrieval": True,
+            },
+        }
+    )
+    assert ols_config.solr_hybrid is not None
+    assert ols_config.solr_hybrid.pre_retrieval is True
 
 
 def test_config_reserves_tool_budget_for_solr_hybrid_without_mcp():

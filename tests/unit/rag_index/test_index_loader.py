@@ -33,7 +33,7 @@ def test_index_loader_no_id():
 
     with (
         patch(
-            "ols.src.rag_index.index_loader.HuggingFaceEmbedding",
+            "llama_index.embeddings.huggingface.HuggingFaceEmbedding",
             return_value=mock_embed,
         ),
         patch.object(il.IndexLoader, "_load_index"),
@@ -55,7 +55,7 @@ def test_index_loader():
             "llama_index.vector_stores.faiss.FaissVectorStore.from_persist_dir"
         ) as from_persist_dir,
         patch("llama_index.core.load_index_from_storage", new=MockLlamaIndex),
-        patch("ols.src.rag_index.index_loader.HuggingFaceEmbedding"),
+        patch("llama_index.embeddings.huggingface.HuggingFaceEmbedding"),
         patch(
             "llama_index.core.settings.resolve_embed_model",
             side_effect=lambda m, **kw: m,

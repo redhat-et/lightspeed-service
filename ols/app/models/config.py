@@ -1311,12 +1311,104 @@ class GuardrailsConfig(BaseModel):
     tool_result_inspection: ToolResultInspectionConfig = ToolResultInspectionConfig()
 
 
+class EmbedModelConfig(BaseModel):
+    """Embedding model used for RAG queries.
+
+    Omit the section to load the bundled HuggingFace weights in-process. Remote
+    types (``vllm``, ``tei``) send the same weights over an OpenAI-compatible
+    ``/v1/embeddings`` endpoint, so the query encoder can be scaled, GPU-accelerated
+    and replaced independently of the OLS image.
+
+    The configured model must match the weights used to build the vector indexes:
+    a mismatch degrades recall silently instead of failing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = Field(
+        default=constants.EMBED_MODEL_TYPE_HUGGINGFACE,
+        description=(
+            "Embedding backend: ``huggingface`` loads bundled weights in-process, "
+            "``vllm`` and ``tei`` use a remote OpenAI-compatible endpoint."
+        ),
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="Remote embedding endpoint base URL, including the ``/v1`` suffix.",
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model name sent to a remote endpoint; for ``huggingface`` it overrides "
+            "the bundled per-path model name when set."
+        ),
+    )
+    credentials_path: Optional[str] = Field(
+        default=None,
+        description="File or directory holding the ``apitoken`` file for the endpoint.",
+    )
+    api_key: Optional[str] = Field(
+        default=None,
+        description="Resolved from ``credentials_path``; set directly only in tests.",
+    )
+    timeout_s: float = Field(
+        default=constants.DEFAULT_EMBED_MODEL_TIMEOUT_S,
+        gt=0.0,
+        description="Timeout in seconds for each embedding request.",
+    )
+
+    def __init__(self, data: Optional[dict] = None) -> None:
+        """Initialize configuration and read credentials from file."""
+        if data is None:
+            super().__init__()
+            return
+        data = dict(data)
+        if data.get(constants.CREDENTIALS_PATH_SELECTOR) is not None:
+            data["api_key"] = checks.read_secret(
+                data,
+                constants.CREDENTIALS_PATH_SELECTOR,
+                constants.API_TOKEN_FILENAME,
+                raise_on_error=False,
+            )
+        super().__init__(**data)
+
+    def validate_yaml(self) -> None:
+        """Validate the configured embedding backend."""
+        if self.type not in constants.SUPPORTED_EMBED_MODEL_TYPES:
+            raise checks.InvalidConfigurationError(
+                "embed_model.type must be one of "
+                f"{sorted(constants.SUPPORTED_EMBED_MODEL_TYPES)}, got {self.type!r}"
+            )
+        if self.type == constants.EMBED_MODEL_TYPE_HUGGINGFACE:
+            if self.url is not None:
+                raise checks.InvalidConfigurationError(
+                    "embed_model.url is only valid for remote embed_model.type "
+                    f"({constants.EMBED_MODEL_TYPE_VLLM}, "
+                    f"{constants.EMBED_MODEL_TYPE_TEI})"
+                )
+            return
+        if not self.url:
+            raise checks.InvalidConfigurationError(
+                f"embed_model.url is required for embed_model.type {self.type!r}"
+            )
+        if not checks.is_valid_http_url(self.url):
+            raise checks.InvalidConfigurationError(
+                "embed_model.url must be a valid http or https URL with a host; "
+                f"got {self.url!r}"
+            )
+        if not self.model:
+            raise checks.InvalidConfigurationError(
+                f"embed_model.model is required for embed_model.type {self.type!r}"
+            )
+
+
 class OLSConfig(BaseModel):
     """OLS configuration."""
 
     conversation_cache: Optional[ConversationCacheConfig] = None
     logging_config: Optional[LoggingConfig] = None
     reference_content: Optional[ReferenceContent] = None
+    embed_model: Optional[EmbedModelConfig] = None
     authentication_config: AuthenticationConfig = AuthenticationConfig()
     tls_config: TLSConfig = TLSConfig()
     system_prompt_path: Optional[str] = None
@@ -1370,6 +1462,8 @@ class OLSConfig(BaseModel):
         self.logging_config = LoggingConfig(**data.get("logging_config", {}))
         if data.get("reference_content") is not None:
             self.reference_content = ReferenceContent(data.get("reference_content"))
+        if data.get("embed_model") is not None:
+            self.embed_model = EmbedModelConfig(data.get("embed_model"))
         self.default_provider = data.get("default_provider", None)
         self.default_model = data.get("default_model", None)
         self.max_iterations = data.get("max_iterations")
@@ -1452,7 +1546,7 @@ class OLSConfig(BaseModel):
         if self.quota_handlers and self.quota_handlers.storage:
             self.quota_handlers.storage.tls_security_profile = self.tls_security_profile
 
-    def validate_yaml(self, disable_tls: bool = False) -> None:
+    def validate_yaml(self, disable_tls: bool = False) -> None:  # noqa: C901
         """Validate OLS config."""
         if self.conversation_cache is not None:
             self.conversation_cache.validate_yaml()
@@ -1471,6 +1565,8 @@ class OLSConfig(BaseModel):
             self.proxy_config.validate_yaml()
         if self.solr_hybrid is not None:
             self.solr_hybrid.validate_yaml()
+        if self.embed_model is not None:
+            self.embed_model.validate_yaml()
 
 
 class DevConfig(BaseModel):

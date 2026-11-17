@@ -17,6 +17,7 @@ from ols.app.models.config import (
     Config,
     ConversationCacheConfig,
     DevConfig,
+    EmbedModelConfig,
     InMemoryCacheConfig,
     LLMProviders,
     LoggingConfig,
@@ -4505,3 +4506,102 @@ def test_provider_config_get_credentials_with_directory(tmp_path: Path) -> None:
 
     secret_file.write_text("new-dir-key")
     assert provider_config.get_credentials() == "new-dir-key"
+
+
+def test_ols_config_embed_model_absent_by_default():
+    """``embed_model`` is None when the section is omitted from the config."""
+    ols_config = OLSConfig(
+        {
+            "default_provider": "p",
+            "default_model": "m",
+            "conversation_cache": {"type": "memory", "memory": {"max_entries": 10}},
+        }
+    )
+    assert ols_config.embed_model is None
+
+
+def test_ols_config_embed_model_parses_remote_backend():
+    """Remote embedders parse url, model and timeout from ``ols_config.embed_model``."""
+    ols_config = OLSConfig(
+        {
+            "default_provider": "p",
+            "default_model": "m",
+            "conversation_cache": {"type": "memory", "memory": {"max_entries": 10}},
+            "embed_model": {
+                "type": "vllm",
+                "url": "http://vllm-embedding:8000/v1",
+                "model": "ibm-granite/granite-embedding-small-english-r2",
+                "timeout_s": 12.5,
+            },
+        }
+    )
+
+    assert ols_config.embed_model is not None
+    assert ols_config.embed_model.type == "vllm"
+    assert ols_config.embed_model.url == "http://vllm-embedding:8000/v1"
+    assert (
+        ols_config.embed_model.model == "ibm-granite/granite-embedding-small-english-r2"
+    )
+    assert ols_config.embed_model.timeout_s == 12.5
+
+    ols_config.embed_model.validate_yaml()
+
+
+def test_ols_config_embed_model_defaults_to_huggingface():
+    """An empty ``embed_model`` section keeps the in-process default backend."""
+    embed_config = EmbedModelConfig({})
+
+    assert embed_config.type == constants.EMBED_MODEL_TYPE_HUGGINGFACE
+    assert embed_config.url is None
+    assert embed_config.model is None
+    assert embed_config.timeout_s == constants.DEFAULT_EMBED_MODEL_TIMEOUT_S
+
+    embed_config.validate_yaml()
+
+
+def test_ols_config_embed_model_reads_api_key_from_file():
+    """The endpoint token is read from the credentials file, not from YAML."""
+    embed_config = EmbedModelConfig(
+        {
+            "type": "tei",
+            "url": "http://tei-embedding:80/v1",
+            "model": "ibm-granite/granite-embedding-small-english-r2",
+            "credentials_path": "tests/config/secret/apitoken",
+        }
+    )
+
+    assert embed_config.api_key == "secret_key"
+
+
+@pytest.mark.parametrize(
+    "data,match",
+    [
+        ({"type": "bedrock"}, "embed_model.type must be one of"),
+        (
+            {"type": "vllm", "model": "granite-embedding-small-english-r2"},
+            "embed_model.url is required",
+        ),
+        (
+            {"type": "tei", "url": "not-a-url", "model": "granite"},
+            "embed_model.url must be a valid http or https URL",
+        ),
+        (
+            {"type": "vllm", "url": "http://vllm-embedding:8000/v1"},
+            "embed_model.model is required",
+        ),
+        (
+            {"type": "huggingface", "url": "http://vllm-embedding:8000/v1"},
+            "embed_model.url is only valid for remote embed_model.type",
+        ),
+    ],
+)
+def test_embed_model_validate_yaml_rejects_invalid_config(data, match):
+    """Invalid backend combinations fail configuration validation."""
+    with pytest.raises(InvalidConfigurationError, match=match):
+        EmbedModelConfig(data).validate_yaml()
+
+
+def test_embed_model_rejects_unknown_fields():
+    """Unknown ``embed_model`` keys are rejected instead of silently ignored."""
+    with pytest.raises(ValidationError):
+        EmbedModelConfig({"type": "huggingface", "unknown_field": "value"})

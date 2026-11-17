@@ -1231,3 +1231,76 @@ dev_config:
             model_name="ibm-granite/granite-embedding-small-english-r2"
         )
     config.reload_empty()
+
+
+def test_solr_hybrid_search_uses_remote_embedding_endpoint():
+    """``ols_config.embed_model`` switches the Solr query encoder to a remote endpoint."""
+    yaml_stream = """
+---
+llm_providers:
+  - name: p1
+    type: openai
+    url: "https://url1"
+    credentials_path: tests/config/secret/apitoken
+    models:
+      - name: m1
+        url: "https://murl1"
+        credentials_path: tests/config/secret/apitoken
+        context_window_size: 450
+        parameters:
+          max_tokens_for_response: 100
+ols_config:
+  solr_hybrid:
+    solr_http_base: "http://localhost:8080"
+  embed_model:
+    type: vllm
+    url: "http://vllm-embedding:8000/v1"
+    model: ibm-granite/granite-embedding-small-english-r2
+  conversation_cache:
+    type: memory
+    memory:
+      max_entries: 1000
+  logging_config:
+    app_log_level: info
+    lib_log_level: warning
+  default_provider: p1
+  default_model: m1
+  user_data_collection:
+    transcripts_disabled: true
+dev_config:
+  disable_tls: true
+  disable_auth: true
+"""
+
+    class _StubEmbed:
+        def get_text_embedding(self, text: str) -> list[float]:
+            return [0.0]
+
+    with (
+        patch(
+            "ols.src.rag_index.openai_embedding.OpenAICompatibleEmbedding",
+            autospec=True,
+        ) as mock_openai,
+        patch(
+            "ols.src.rag_index.solr_support.SolrHybridSearch._resolve_chunk_filter_query",
+            return_value="is_chunk:true AND product:openshift_container_platform",
+        ),
+    ):
+        mock_openai.return_value = _StubEmbed()
+        config.reload_empty()
+        config.config = config._load_config_from_yaml_stream(
+            io.StringIO(yaml_stream), ignore_missing_certs=True
+        )
+        # reset Solr hybrid init state left behind by earlier tests
+        config._solr_hybrid_initialized = False
+        config._cached_solr_hybrid_search = None
+        config._cached_solr_embed_model = None
+        client = config.solr_hybrid_search
+        assert client is not None
+        mock_openai.assert_called_once_with(
+            model_name="ibm-granite/granite-embedding-small-english-r2",
+            api_base="http://vllm-embedding:8000/v1",
+            api_key="EMPTY",
+            timeout_s=30.0,
+        )
+    config.reload_empty()

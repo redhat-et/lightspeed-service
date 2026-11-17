@@ -18,6 +18,7 @@ from ols.src.quota.token_usage_history import TokenUsageHistory
 
 # as the index_loader.py is excluded from type checks, it confuses
 # mypy a bit, hence the [attr-defined] bellow
+from ols.src.rag_index.embed_model import get_embed_model
 from ols.src.rag_index.index_loader import IndexLoader  # type: ignore [attr-defined]
 from ols.src.rag_index.solr_support import SolrHybridSearch
 from ols.src.redaction.query_filters import QueryFiltersRedactor
@@ -174,22 +175,18 @@ class AppConfig:
         if ref is None or not ref.indexes:
             return None
         if self._rag_index_loader is None:
-            self._rag_index_loader = IndexLoader(ref)
+            self._rag_index_loader = IndexLoader(ref, self.ols_config.embed_model)
         return self._rag_index_loader
 
     def _byok_embed_model(self) -> Any:
-        """Load and cache the BYOK HuggingFace embedding model.
+        """Load and cache the BYOK embedding model.
 
         Shared by tools_rag and skills_rag so the model weights are loaded once.
         """
         if self._cached_byok_embed_model is not None:
             return self._cached_byok_embed_model
-        from llama_index.embeddings.huggingface import (  # pylint: disable=import-outside-toplevel
-            HuggingFaceEmbedding,
-        )
-
-        self._cached_byok_embed_model = HuggingFaceEmbedding(
-            model_name=constants.EMBEDDINGS_MODEL_BYOK_SUBDIR
+        self._cached_byok_embed_model = get_embed_model(
+            self.ols_config.embed_model, constants.EMBEDDINGS_MODEL_BYOK_SUBDIR
         )
         return self._cached_byok_embed_model
 
@@ -261,17 +258,13 @@ class AppConfig:
         return rag
 
     def _solr_hybrid_embed_model(self) -> Any:
-        """Load and cache the HuggingFace embedding model for OKP ``portal-rag`` hybrid search."""
+        """Load and cache the embedding model for OKP ``portal-rag`` hybrid search."""
         if self._cached_solr_embed_model is not None:
             return self._cached_solr_embed_model
-        from llama_index.embeddings.huggingface import (  # pylint: disable=import-outside-toplevel
-            HuggingFaceEmbedding,
-        )
-
         for name in ("sentence_transformers", "transformers"):
             logging.getLogger(name).setLevel(logging.ERROR)
-        self._cached_solr_embed_model = HuggingFaceEmbedding(
-            model_name=constants.SOLR_HYBRID_EMBEDDING_MODEL_ID
+        self._cached_solr_embed_model = get_embed_model(
+            self.ols_config.embed_model, constants.SOLR_HYBRID_EMBEDDING_MODEL_ID
         )
         return self._cached_solr_embed_model
 

@@ -130,6 +130,23 @@ RAG_SIMILARITY_CUTOFF = 0.3
 # vectors stored in the OKP 1.3 index; equal dimensionality alone is insufficient.
 SOLR_HYBRID_EMBEDDING_MODEL_ID = "ibm-granite/granite-embedding-small-english-r2"
 
+# embedding model backends: bundled local HuggingFace weights, or an OpenAI-compatible
+# ``/v1/embeddings`` endpoint served by vLLM (pooling runner) or TEI.
+EMBED_MODEL_TYPE_HUGGINGFACE = "huggingface"
+EMBED_MODEL_TYPE_VLLM = "vllm"
+EMBED_MODEL_TYPE_TEI = "tei"
+SUPPORTED_EMBED_MODEL_TYPES = frozenset(
+    {
+        EMBED_MODEL_TYPE_HUGGINGFACE,
+        EMBED_MODEL_TYPE_VLLM,
+        EMBED_MODEL_TYPE_TEI,
+    }
+)
+# vLLM and TEI answer without authentication unless deployed behind a gateway, but the
+# OpenAI client requires a non-empty key; this placeholder is the usual convention.
+EMBED_MODEL_PLACEHOLDER_API_KEY = "EMPTY"
+DEFAULT_EMBED_MODEL_TIMEOUT_S = 30.0
+
 
 # cache constants
 CACHE_TYPE_MEMORY = "memory"

@@ -119,6 +119,37 @@ ols_config:
 Product documentation is served exclusively via Solr (OKP). Local FAISS indexes
 under ``reference_content`` are for BYOK (user-supplied) content only.
 
+### Embedding model backend (`ols_config.embed_model`)
+
+Every RAG path embeds queries through ``ols/src/rag_index/embed_model.py``:
+``solr_hybrid``, ``reference_content`` indexes, tool filtering and skill selection.
+Omit the section to keep the current behavior: bundled HuggingFace weights loaded
+in-process, one default model per path (``EMBEDDINGS_MODEL_BYOK_SUBDIR`` for BYOK
+and tools/skills, ``SOLR_HYBRID_EMBEDDING_MODEL_ID`` for Solr).
+
+```yaml
+ols_config:
+  embed_model:
+    type: vllm            # huggingface (default) | vllm | tei
+    url: "http://vllm-embedding:8000/v1"
+    model: ibm-granite/granite-embedding-small-english-r2
+    credentials_path: embedding_api_key.txt   # optional
+    timeout_s: 30.0                            # optional, default 30s
+```
+
+- ``vllm`` and ``tei`` both speak the OpenAI ``/v1/embeddings`` API and are served by
+  ``OpenAICompatibleEmbedding`` (``ols/src/rag_index/openai_embedding.py``), a thin
+  ``BaseEmbedding`` wrapper around the ``openai`` client. llama-index's own
+  ``OpenAIEmbedding`` is not usable here because it rejects model names outside its
+  built-in OpenAI enum. Serve the model with vLLM's pooling runner
+  (``--runner pooling``; older releases use ``--task embed``).
+- ``url`` and ``model`` are required for remote types and rejected for ``huggingface``.
+  For ``huggingface``, ``model`` optionally overrides the bundled name.
+- Without ``credentials_path`` the client sends
+  ``EMBED_MODEL_PLACEHOLDER_API_KEY``, which unauthenticated vLLM/TEI deployments ignore.
+- The configured model must be the exact checkpoint the vector indexes were built with.
+  A mismatch degrades recall silently instead of failing, so pin the model revision.
+
 ### Hybrid search and chunk expansion
 
 OLS sends a hybrid query to OKP Solr's ``/hybrid-search`` endpoint. The query

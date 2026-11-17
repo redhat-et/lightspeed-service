@@ -90,6 +90,15 @@ ols_config:
     indexes:
       - product_docs_index_path: "./vector_db/user_application_docs/version_1"
         product_docs_index_id: user-application-docs-version_1
+  # Embedding backend for RAG queries. Omit to load bundled HuggingFace weights
+  # in-process. The remote model must produce the same vectors as the index:
+  # ``vllm``/``tei`` must serve exactly the weights used to build the indexes.
+  # embed_model:
+  #   type: vllm            # huggingface (default) | vllm | tei
+  #   url: "http://vllm-embedding:8000/v1"
+  #   model: ibm-granite/granite-embedding-small-english-r2
+  #   credentials_path: embedding_api_key.txt   # optional, holds the apitoken file
+  #   timeout_s: 30.0
   conversation_cache:
     type: memory
     memory:

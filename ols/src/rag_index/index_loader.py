@@ -4,10 +4,9 @@
 import logging
 from typing import Any, Optional
 
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-
-from ols.app.models.config import ReferenceContent
+from ols.app.models.config import EmbedModelConfig, ReferenceContent
 from ols.constants import EMBEDDINGS_MODEL_BYOK_SUBDIR, RAG_CONTENT_LIMIT
+from ols.src.rag_index.embed_model import get_embed_model
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +118,11 @@ def load_llama_index_deps() -> None:
 class IndexLoader:
     """Load index from local file storage."""
 
-    def __init__(self, index_config: Optional[ReferenceContent]) -> None:
+    def __init__(
+        self,
+        index_config: Optional[ReferenceContent],
+        embed_model_config: Optional[EmbedModelConfig] = None,
+    ) -> None:
         """Initialize loader."""
         load_llama_index_deps()
         self._indexes = None
@@ -127,6 +130,7 @@ class IndexLoader:
         self._loaded_index_configs = None
 
         self._index_config = index_config
+        self._embed_model_config = embed_model_config
         logger.debug("Config used for index load: %s", str(self._index_config))
 
         if self._index_config is None:
@@ -137,11 +141,9 @@ class IndexLoader:
             self._embed_model = self._get_embed_model()
             self._load_index()
 
-    @staticmethod
-    def _get_embed_model() -> HuggingFaceEmbedding:
-        """Load the bundled BYOK embedding model."""
-        logger.debug("Loading embedding model: %s", EMBEDDINGS_MODEL_BYOK_SUBDIR)
-        return HuggingFaceEmbedding(model_name=EMBEDDINGS_MODEL_BYOK_SUBDIR)
+    def _get_embed_model(self) -> Any:
+        """Load the embedding model configured for BYOK indexes."""
+        return get_embed_model(self._embed_model_config, EMBEDDINGS_MODEL_BYOK_SUBDIR)
 
     def _load_index(self) -> None:
         """Load vector index."""

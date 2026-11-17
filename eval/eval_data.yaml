@@ -284,44 +284,14 @@
   - turn_id: turn_001
     query: How can OpenShift Logging be used to configure different logging components
       and learn about logs?
-    expected_response: 'OpenShift Logging is a component that can be used to configure
-      and manage various logging aspects in an OpenShift cluster. To use OpenShift
-      Logging for configuring different logging components and learning about logs,
-      you can follow these steps:
+    expected_response: |-
+      OpenShift Logging is deployed and configured with operators, not the Service Catalog (removed from OpenShift). The current procedure:
 
-
-      1. **Access the OpenShift web console:** To start using OpenShift Logging, navigate
-      to the OpenShift web console and log in using your credentials.
-
-
-      2. **Navigate to the Service Catalog:** From the OpenShift web console, go to
-      the Service Catalog page. This page lists all the services that are available
-      for you to use in your cluster.
-
-
-      3. **Deploy OpenShift Logging:** Look for the OpenShift Logging service in the
-      Service Catalog. Click on it and follow the instructions to deploy it in your
-      cluster. Once the deployment is complete, OpenShift Logging will be running
-      as a set of pods in your cluster.
-
-
-      4. **Configure logging components:** After deploying OpenShift Logging, you
-      can configure various logging components such as log storage, log collectors,
-      and the logging web console plugin. You can do this by using the OpenShift Logging
-      API or by modifying the configuration files directly.
-
-
-      5. **Learn about logs:** Once OpenShift Logging is configured, you can use it
-      to learn about the logs in your cluster. You can view the logs in real-time,
-      search for specific log entries, and create custom dashboards to visualize the
-      log data. Additionally, OpenShift Logging provides various tools and features
-      to help you analyze and troubleshoot issues with your applications and services.
-
-
-      Note that the actual steps for configuring OpenShift Logging may vary depending
-      on the specific version of OpenShift that you are using and the configuration
-      options that are available. The OpenShift documentation is a good resource for
-      learning more about how to use OpenShift Logging in your cluster.'
+      1. Install the Loki Operator into `openshift-operators-redhat`. It manages the log store: it receives, indexes and stores logs in S3-compatible object storage through a `LokiStack` custom resource.
+      2. Create the `LokiStack` custom resource.
+      3. Install the Red Hat OpenShift Logging Operator, which deploys and manages the collector.
+      4. Grant the collector permissions, then create a `ClusterLogForwarder` custom resource (`observability.openshift.io/v1`, namespace `openshift-logging`) to forward logs to the in-cluster `LokiStack`. The output configuration must include the `tls.ca` block, otherwise the collector cannot verify the `LokiStack` gateway certificate.
+      5. Query the collected logs through the logging console and the `LokiStack` gateway.
 - conversation_group_id: conv_018
   turns:
   - turn_id: turn_001
@@ -363,11 +333,8 @@
   - turn_id: turn_001
     query: What is the role of Red Hat OpenShift Data Foundation in persistent storage
       management for containers?
-    expected_response: The Red Hat OpenShift Data Foundation is an Operator that provides
-      highly integrated and simplified persistent storage management for containers
-      in a Red Hat OpenShift environment. It allows for the addition of new images
-      on top of the base RHCOS image, creating a custom layered image with all RHCOS
-      functions and additional features for specific nodes in the cluster.
+    expected_response: |-
+      Red Hat OpenShift Data Foundation (ODF) is a software-defined storage operator that provides persistent storage management for containers on OpenShift. It is deployed as a set of Operator Lifecycle Manager (OLM) operator bundles that provision and manage storage, backed by Red Hat Ceph Storage or external storage services such as IBM FlashSystem or Microsoft Azure, and presents it to workloads through persistent volume claims. It also ships a console plugin for managing storage from the OpenShift web console.
 - conversation_group_id: conv_022
   turns:
   - turn_id: turn_001

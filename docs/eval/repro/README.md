@@ -3,8 +3,15 @@
 This directory pins the ruler and the slice used for the published numbers, so a
 reader can reproduce them on their own hardware instead of quoting ours.
 
-**This branch reproduces the CPU arm: 65 / 100.** The other two arms live on
-`gold-gpu-ask-mode` (82 / 99) and `gold-hybrid-ask-mode` (70 / 100).
+**This branch reproduces the hybrid arm: 70 / 100.** The CPU arm (65 / 100) lives
+on `gold-cpu-ask-mode` and the GPU arm (82 / 99) on `gold-gpu-ask-mode`.
+
+The hybrid arm is the only split pipeline: the CPU model runs round 1 with the docs
+tool bound and calls it, then a separate writer model — configured server-side with
+`ols_config.synthesis_llm` — writes the final answer from the retrieved passages.
+It runs toolpath (`pre_retrieval: false`) with `max_iterations: 2`, so round 2 is
+always the synthesis round. This is the only branch that carries the
+`synthesis_llm` feature.
 
 The three published results:
 
@@ -29,7 +36,9 @@ answer. Only `gold-hybrid-ask-mode` carries that feature.
 ## What you need
 
 1. An image built from this branch (the config keys in the spec are only read by
-   this code), running with pre-retrieval enabled and remote embeddings configured.
+   this code), running with remote embeddings configured and the server keys in
+   `olsconfig.hybrid.example.yaml` applied: toolpath, `max_iterations: 2`, and a
+   `synthesis_llm` writer.
 2. The OpenShift documentation index in Solr and an embedding endpoint serving the
    checkpoint the index was built with (`granite-embedding-small-english-r2` for
    the published runs). If the embedder and the index disagree the vectors are

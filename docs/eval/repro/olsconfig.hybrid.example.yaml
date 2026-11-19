@@ -1,0 +1,22 @@
+# Server-side keys for the hybrid arm. Merge into your olsconfig.yaml.
+#
+# The query still names the CPU provider/model (APP_PROVIDER / APP_MODEL in
+# judges.env): that model runs round 1 and calls the docs tool. These keys decide
+# which model writes the final answer.
+
+ols_config:
+  # Round 1 is the tool round, round 2 is the synthesis round. With the default
+  # cap of 5 the answer is written at round 5 and the arm measured here is not
+  # reproduced.
+  max_iterations: 2
+
+  solr_hybrid:
+    # The hybrid arm was measured on the toolpath: the model calls the docs tool
+    # rather than receiving passages before the first call.
+    pre_retrieval: false
+
+  synthesis_llm:
+    # Must name an existing entry under llm_providers. The published run used a
+    # GPU-hosted writer; any OpenAI-compatible endpoint works.
+    provider: gpu-writer
+    model: your-gpu-model

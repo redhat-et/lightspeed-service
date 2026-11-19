@@ -6,10 +6,13 @@ this branch ships:
 
 - `ols_config.embed_model` — remote embedding backends for RAG (vLLM pooling runner or TEI)
 - `solr_hybrid.pre_retrieval` — retrieve documentation before the first LLM call
+- `ols_config.synthesis_llm` — keep the tool rounds on the primary model and serve
+  the final answer round with a separate writer model (this branch only)
 
-The writer-swap arm in §4 needs no code: the writer is chosen per request with
-`provider`/`model`, so pointing a query at a GPU or externally-hosted model is a
-configuration change, not a branch difference.
+The whole-request writer-swap arm in §4 needs no code: the writer is chosen per
+request with `provider`/`model`, so pointing a query at a GPU or externally-hosted
+model is a configuration change. The split arm is different — it needs the
+synthesis code and a server-side `ols_config.synthesis_llm`.
 
 It is a methodology spec, not a results report. Run it on your own hardware and quote
 your own numbers.
@@ -81,6 +84,7 @@ branch:
 | 2. Remote embedder | `embed_model` pointing at a vLLM pooling-runner service |
 | 3. Both | 1 + 2 together |
 | 4. Writer swap | Same pipeline, strong writer model (GPU or external) |
+| 5. Synthesis split | `synthesis_llm` set with `max_iterations: 2`: primary model runs the tool round, synthesis model writes the final round |
 
 Additional comparisons worth running when model choice is the question: a small model
 on GPU for ask mode (the strongest skeptic's alternative), and an all-CPU arm to locate

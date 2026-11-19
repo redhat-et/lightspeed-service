@@ -64,6 +64,10 @@ lightspeed-eval \
   --output-dir <your-output-dir>
 ```
 
+The app call authenticates with `API_KEY` in the environment: export your OLS
+token before starting the run (`export API_KEY=$(cat <your-token-file>)`). The
+harness reads it directly; it is never written into the rendered config.
+
 `render_config.py` is deliberately dumb: it substitutes placeholders from the
 environment, refuses to run with a missing variable, and never writes a secret
 into the file (the key is passed through `environment: OPENAI_API_KEY`, which the

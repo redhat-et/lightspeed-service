@@ -4,29 +4,31 @@ This directory pins the ruler and the slice used for the published numbers, so a
 reader can reproduce them on their own hardware instead of quoting ours.
 
 **This branch reproduces the GPU arm: 82 / 99.** The CPU arm (65 / 100) lives on
-`gold-cpu-ask-mode`; the code is identical, only the writer the request is routed
-to differs.
+`gold-cpu-ask-mode` and the hybrid arm (70 / 100) on `gold-hybrid-ask-mode`.
 
 The GPU arm is a whole-request writer: the GPU model generates every round. It is
 reached through a `provider`/`model` override on the query, so the app default can
 stay on a CPU model and `ols_config.synthesis_llm` is not used.
 
-The two published results:
+The three published results:
 
 | branch | pipeline | result | mean score |
 |---|---|---|---|
 | `gold-cpu-ask-mode` | pre-retrieval, a CPU-hosted model writes every round | **65 / 100** | 0.741 |
-| `gold-gpu-ask-mode` | pre-retrieval, the request is routed to a GPU model that writes the whole answer | **82 / 99** | 0.837 |
+| `gold-gpu-ask-mode` | pre-retrieval, a GPU model writes the whole answer | **82 / 99** | 0.837 |
+| `gold-hybrid-ask-mode` | toolpath, `max_iterations: 2`, the CPU model runs the tool round and `synthesis_llm` writes the final answer | **70 / 100** | 0.763 |
 
-Both are scored on the first 100 conversations of `eval/eval_data.yaml`
+All are scored on the first 100 conversations of `eval/eval_data.yaml`
 (`slice-100.txt`), with three judges averaged per question, PASS at 0.75, and the
 seven gold corrections described below. The GPU arm scored 99 because `conv_019`
 returned an empty response in that run and produced no judgeable turn; on a run
 where it succeeds the denominator is 100.
 
-Neither arm uses `ols_config.synthesis_llm`. The GPU result is a whole-request
-writer: the same model generates every round, it is just reached over a different
-`provider`/`model` in the query.
+The CPU and GPU arms are single-model: the same model writes every round, and a
+request reaches a different writer only through `provider`/`model`. The hybrid arm
+is the only split one — the CPU model runs the tool round and a separate writer
+model, configured server-side with `ols_config.synthesis_llm`, writes the final
+answer. Only `gold-hybrid-ask-mode` carries that feature.
 
 ## What you need
 
@@ -40,7 +42,9 @@ writer: the same model generates every round, it is just reached over a differen
    CPU model; for the GPU arm it is an `openai`-type provider pointed at your GPU
    endpoint. The harness selects it per request, so the app default can stay on
    the CPU model. The published GPU run used GLM-5.3 as the whole-request writer
-   with `solr_hybrid.pre_retrieval: true`.
+   with `solr_hybrid.pre_retrieval: true`. The hybrid arm is the exception: the
+   request still names the CPU model, and the writer is chosen server-side by
+   `ols_config.synthesis_llm`.
 4. A judge endpoint reachable over an OpenAI-compatible API, with three models.
    You supply the endpoint, the key and the model names — nothing is hardcoded.
 
@@ -89,7 +93,7 @@ threshold or the key to match a run; use the key on the branch.
 
 At n = 100 a pass rate near 0.70 has a 95% interval of roughly ±9 points, and the
 panel moves individual questions too. Reproducing means landing within that band
-with the same *shape* of failure — not hitting 65 or 82 exactly.
+with the same *shape* of failure — not hitting 65, 70 or 82 exactly.
 
 Compare question by question, not only on the total: a run that scores one or two
 below the published number with the same failures is a reproduction; a run that

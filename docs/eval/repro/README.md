@@ -3,9 +3,13 @@
 This directory pins the ruler and the slice used for the published numbers, so a
 reader can reproduce them on their own hardware instead of quoting ours.
 
-**This branch reproduces the CPU arm: 65 / 100.** The GPU arm (82 / 99) lives on
-`gold-gpu-ask-mode`; the code is identical, only the writer the request is routed
+**This branch reproduces the GPU arm: 82 / 99.** The CPU arm (65 / 100) lives on
+`gold-cpu-ask-mode`; the code is identical, only the writer the request is routed
 to differs.
+
+The GPU arm is a whole-request writer: the GPU model generates every round. It is
+reached through a `provider`/`model` override on the query, so the app default can
+stay on a CPU model and `ols_config.synthesis_llm` is not used.
 
 The two published results:
 
@@ -35,7 +39,8 @@ writer: the same model generates every round, it is just reached over a differen
 3. A provider entry in `olsconfig.yaml` for the writer. For the CPU arm it is your
    CPU model; for the GPU arm it is an `openai`-type provider pointed at your GPU
    endpoint. The harness selects it per request, so the app default can stay on
-   the CPU model.
+   the CPU model. The published GPU run used GLM-5.3 as the whole-request writer
+   with `solr_hybrid.pre_retrieval: true`.
 4. A judge endpoint reachable over an OpenAI-compatible API, with three models.
    You supply the endpoint, the key and the model names — nothing is hardcoded.
 

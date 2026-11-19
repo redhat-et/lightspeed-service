@@ -682,22 +682,8 @@
   turns:
   - turn_id: turn_001
     query: What are some examples of Day-1 customizations in OpenShift?
-    expected_response: 'Day-1 customizations in OpenShift refer to changes that can
-      be made during the initial deployment of a cluster. Some examples include:
-
-
-      1. Provisioning infrastructure: This could be on a cloud platform like AWS or
-      by setting up the infrastructure manually.
-
-      2. Supplying information in an install-config.yaml file: This would typically
-      involve providing details such as credentials and cluster name.
-
-
-      However, it''s important to note that RHCOS systems in OpenShift Container Platform
-      are designed to be fully managed from the OpenShift Container Platform cluster
-      after deployment. Directly changing an RHCOS machine is discouraged. Instead,
-      changes should be made using Kubernetes workload objects such as DaemonSet and
-      Deployment.'
+    expected_response: |-
+      Day-1 customizations are changes applied during the initial deployment of the cluster, typically through Ignition config files or boot options. Examples include: setting kernel arguments when particular kernel features or tuning are needed at first boot; encrypting the root file system on nodes, such as for FIPS support; adding custom kernel modules for hardware that is not supported by default; and adjusting clock settings with Chronyd. A cluster can also be customized at day 1 by provisioning the infrastructure and supplying information such as credentials and cluster name in an install-config.yaml file when running openshift-install.
 - conversation_group_id: conv_045
   turns:
   - turn_id: turn_001
@@ -787,25 +773,8 @@
   - turn_id: turn_001
     query: How can the cluster owner change the node count per availability zone in
       the Machine pools tab?
-    expected_response: 'The cluster owner can change the node count per availability
-      zone by following these steps:
-
-
-      1. Navigate to the ''Machine pools'' tab in the Red Hat OpenShift Cluster Manager.
-
-      2. Locate the machine pool for which you want to change the node count.
-
-      3. Select ''More options'' next to the machine pool.
-
-      4. Click on ''Scale'' from the dropdown menu.
-
-      5. This will open the ''Edit node count'' dialog where you can change the node
-      count per availability zone.
-
-      6. If autoscaling is enabled, you can also set the range for autoscaling in
-      this dialog.
-
-      7. Once you have made your changes, click on ''Save'' to apply them.'
+    expected_response: |-
+      The cluster owner changes the node count per availability zone in the Machine pools tab by selecting the machine pool's Options menu (the Edit option) and choosing Edit, which opens the Edit machine pool dialog. In this dialog you can change the node count per availability zone, edit node labels and taints, and view any associated AWS security groups.
 - conversation_group_id: conv_052
   turns:
   - turn_id: turn_001
@@ -902,9 +871,8 @@
   - turn_id: turn_001
     query: What functionality does the Insights Advisor tab use to identify and mitigate
       risks?
-    expected_response: The Insights Advisor tab uses the Remote Health functionality
-      of the OpenShift Container Platform to identify and mitigate risks to security,
-      performance, availability, and stability.
+    expected_response: |-
+      The Red Hat Lightspeed Advisor tab (documented in earlier versions as the Insights Advisor tab) uses the Remote Health functionality of the OpenShift Container Platform to identify and mitigate risks to security, performance, availability, and stability.
 - conversation_group_id: conv_057
   turns:
   - turn_id: turn_001
@@ -1572,17 +1540,8 @@
   - turn_id: turn_001
     query: What should be restored first to avoid issues with Velero when restoring
       Knative resources?
-    expected_response: 'There is no information about the specific requirements for
-      restoring Knative resources using Velero. However, generally speaking, it''s
-      recommended to restore any custom resources or dependencies that your application
-      may have before restoring the application itself.
-
-
-      In the case of Knative, it''s an event-driven system, and there might be some
-      issues if the required components like services, routes, and configurations
-      are not available at the time of restoration. Therefore, it is recommended to
-      restore any necessary Knative resources first before restoring the actual application
-      data.'
+    expected_response: |-
+      Restore the top-level service.serving.knative.dev Service resource first. Velero has limited ability to resolve admission webhook issues during a restore, and admission webhooks typically block child resources. Creating or restoring a top-level object such as service.serving.knative.dev first creates the child resources automatically, so Velero does not have to create and restore them and they are not blocked by an admission webhook. Restore it with: velero restore --from-backup=<backup> --include-resources service.serving.knative.dev
 - conversation_group_id: conv_098
   turns:
   - turn_id: turn_001
@@ -1607,10 +1566,8 @@
   - turn_id: turn_001
     query: Can SSL/TLS security be disabled when using CA certificates with Velero
       in OADP?
-    expected_response: No, It is not possible to disable SSL/TLS security when using
-      CA certificates with Velero in OADP. The context mentions enabling a self-signed
-      CA certificate for object storage to prevent a "certificate signed by unknown
-      authority" error, but there is no mention of an option to disable SSL/TLS security.
+    expected_response: |-
+      Yes. SSL/TLS security can be disabled by setting insecureSkipTLSVerify to "true" in the Velero configuration; setting it to "false" (the default) keeps it enabled. When using CA certificates with object storage, caCert holds the Base64-encoded CA certificate that prevents a "certificate signed by unknown authority" error. Disabling certificate verification is not recommended outside testing.
 - conversation_group_id: conv_100
   turns:
   - turn_id: turn_001

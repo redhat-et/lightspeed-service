@@ -85,6 +85,11 @@ ols_config:
   # Product docs via Solr hybrid (OKP).  Omit solr_hybrid to disable.
   solr_hybrid:
     solr_http_base: "https://solr.example.com:8983"
+  # Write the final answer with a different model than the tool rounds.
+  # Omit to run every round on default_provider/default_model.
+  # synthesis_llm:
+  #   provider: instructlab
+  #   model: model-name
   # BYOK / local FAISS indexes (user-supplied content only).
   reference_content:
     indexes:

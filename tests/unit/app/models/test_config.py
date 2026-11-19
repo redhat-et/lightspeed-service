@@ -4529,6 +4529,90 @@ def test_provider_config_get_credentials_with_directory(tmp_path: Path) -> None:
     assert provider_config.get_credentials() == "new-dir-key"
 
 
+def _config_with_synthesis(synthesis_llm: dict | None) -> "Config":
+    """Build an otherwise valid Config with an optional synthesis_llm block."""
+    ols_config: dict = {
+        "default_provider": "test_provider_name",
+        "default_model": "test_model_name",
+        "conversation_cache": {"type": "memory", "memory": {"max_entries": 100}},
+    }
+    if synthesis_llm is not None:
+        ols_config["synthesis_llm"] = synthesis_llm
+    return Config(
+        {
+            "llm_providers": [
+                {
+                    "name": "test_provider_name",
+                    "type": "openai",
+                    "url": "http://test_provider_url",
+                    "credentials_path": "tests/config/secret/apitoken",
+                    "models": [
+                        {
+                            "name": "test_model_name",
+                            "url": "http://test_model_url",
+                            "credentials_path": "tests/config/secret/apitoken",
+                        }
+                    ],
+                }
+            ],
+            "ols_config": ols_config,
+            "dev_config": {"disable_tls": "true"},
+        }
+    )
+
+
+def test_synthesis_llm_absent_by_default():
+    """No synthesis_llm block means every round runs on the primary model."""
+    config = _config_with_synthesis(None)
+    config.validate_yaml()
+
+    assert config.ols_config.synthesis_llm is None
+
+
+def test_synthesis_llm_parsed():
+    """A configured synthesis_llm is parsed into provider and model."""
+    config = _config_with_synthesis(
+        {"provider": "test_provider_name", "model": "test_model_name"}
+    )
+    config.validate_yaml()
+
+    synthesis_llm = config.ols_config.synthesis_llm
+    assert synthesis_llm is not None
+    assert synthesis_llm.provider == "test_provider_name"
+    assert synthesis_llm.model == "test_model_name"
+
+
+def test_synthesis_llm_unknown_provider():
+    """An unknown synthesis provider is rejected."""
+    config = _config_with_synthesis({"provider": "nope", "model": "test_model_name"})
+
+    with pytest.raises(
+        InvalidConfigurationError,
+        match="synthesis_llm specifies an unknown provider nope",
+    ):
+        config.validate_yaml()
+
+
+def test_synthesis_llm_unknown_model():
+    """An unknown synthesis model is rejected."""
+    config = _config_with_synthesis({"provider": "test_provider_name", "model": "nope"})
+
+    with pytest.raises(
+        InvalidConfigurationError,
+        match="synthesis_llm specifies an unknown model nope",
+    ):
+        config.validate_yaml()
+
+
+def test_synthesis_llm_blank_provider_rejected():
+    """Blank provider names are rejected at parse time."""
+    with pytest.raises(
+        InvalidConfigurationError,
+        match="synthesis_llm provider and model must not be blank",
+    ):
+        _config_with_synthesis({"provider": "  ", "model": "test_model_name"})
+
+
 def test_ols_config_embed_model_absent_by_default():
     """``embed_model`` is None when the section is omitted from the config."""
     ols_config = OLSConfig(

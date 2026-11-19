@@ -119,6 +119,27 @@ ols_config:
 Product documentation is served exclusively via Solr (OKP). Local FAISS indexes
 under ``reference_content`` are for BYOK (user-supplied) content only.
 
+### Dual-model synthesis (`ols_config.synthesis_llm`)
+
+Omit the key to keep every model round on the primary model. When present,
+tool rounds stay on the primary model and only the final answer round is
+served by the configured provider/model. `provider` and `model` must name an
+existing entry in `llm_providers` (checked in `validate_yaml()`); both are
+rejected if blank.
+
+```yaml
+ols_config:
+  synthesis_llm:
+    provider: writer_provider
+    model: writer_model
+```
+
+A configured synthesis model forces the final round to be a synthesis round:
+tools are unbound and the final-synthesis instruction is injected, regardless
+of the provider-stripping rules that apply to single-model requests. This
+prevents an `openai`-type synthesis provider from keeping tools bound and
+emitting tool markup instead of an answer.
+
 ### Embedding model backend (`ols_config.embed_model`)
 
 Every RAG path embeds queries through ``ols/src/rag_index/embed_model.py``:

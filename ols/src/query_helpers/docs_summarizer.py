@@ -24,6 +24,7 @@ from ols.src.prompts.prompt_generator import GeneratePrompt
 from ols.src.query_helpers.history_support import prepare_history
 from ols.src.query_helpers.llm_execution_agent import (
     LLMExecutionAgent,
+    SynthesisModel,
     log_tool_loop_iteration,
 )
 from ols.src.query_helpers.query_helper import QueryHelper
@@ -186,6 +187,7 @@ class DocsSummarizer(QueryHelper):
             token_budget_tracker=self._tracker,
             audit_ctx=self._audit_ctx,
             tool_result_classifier=tool_result_classifier,
+            synthesis_model=self.synthesis_model,
         )
 
     async def _resolve_tools_for_request(
@@ -277,6 +279,40 @@ class DocsSummarizer(QueryHelper):
             self.provider,
             self.model,
             self.generic_llm_params,
+        )
+        self.synthesis_model = self._prepare_synthesis_model()
+
+    def _prepare_synthesis_model(self) -> Optional[SynthesisModel]:
+        """Load the final-answer model when ``ols_config.synthesis_llm`` is set.
+
+        Returns:
+            The configured synthesis model, or None when the final answer is
+            written by the same model that runs the tool rounds.
+        """
+        synthesis_llm = config.ols_config.synthesis_llm
+        if synthesis_llm is None:
+            return None
+        provider_config = config.llm_config.providers[synthesis_llm.provider]
+        model_config = provider_config.models[synthesis_llm.model]
+        llm = self.llm_loader(
+            synthesis_llm.provider,
+            synthesis_llm.model,
+            {
+                GenericLLMParameters.MAX_TOKENS_FOR_RESPONSE: model_config.parameters.max_tokens_for_response  # noqa: E501
+            },
+        )
+        logger.info(
+            "Final answer model: provider=%s model=%s; tool rounds stay on %s/%s",
+            synthesis_llm.provider,
+            synthesis_llm.model,
+            self.provider,
+            self.model,
+        )
+        return SynthesisModel(
+            llm=llm,
+            provider=synthesis_llm.provider,
+            provider_type=provider_config.type,
+            model=synthesis_llm.model,
         )
 
     async def _prepare_prompt_context(

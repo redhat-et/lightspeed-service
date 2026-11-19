@@ -1320,6 +1320,23 @@ class GuardrailsConfig(BaseModel):
     tool_result_inspection: ToolResultInspectionConfig = ToolResultInspectionConfig()
 
 
+class SynthesisLLMConfig(BaseModel, extra="forbid"):
+    """Model that writes the final answer when it differs from the tool-round model."""
+
+    provider: str
+    model: str
+
+    @field_validator("provider", "model")
+    @classmethod
+    def validate_not_blank(cls, value: str) -> str:
+        """Reject blank provider or model names."""
+        if not value.strip():
+            raise checks.InvalidConfigurationError(
+                "synthesis_llm provider and model must not be blank"
+            )
+        return value
+
+
 class EmbedModelConfig(BaseModel):
     """Embedding model used for RAG queries.
 
@@ -1451,6 +1468,8 @@ class OLSConfig(BaseModel):
 
     solr_hybrid: Optional[SolrHybridSettings] = None
 
+    synthesis_llm: Optional[SynthesisLLMConfig] = None
+
     tool_round_cap_fraction: float = constants.DEFAULT_TOOL_ROUND_CAP_FRACTION
 
     offload_storage_path: str = constants.DEFAULT_OFFLOAD_STORAGE_PATH
@@ -1523,6 +1542,8 @@ class OLSConfig(BaseModel):
             self.skills = SkillsConfig(**data.get("skills"))
         if data.get("solr_hybrid", None) is not None:
             self.solr_hybrid = SolrHybridSettings(**data.get("solr_hybrid"))
+        if data.get("synthesis_llm", None) is not None:
+            self.synthesis_llm = SynthesisLLMConfig(**data.get("synthesis_llm"))
 
         self.audit = AuditConfig(**data.get("audit", {}))
 
@@ -1661,6 +1682,21 @@ class Config(BaseModel):
                 f"default_model specifies an unknown model {selected_default_model}"
             )
 
+    def _validate_synthesis_llm(self) -> None:
+        """Validate that synthesis_llm names a configured provider and model."""
+        synthesis_llm = self.ols_config.synthesis_llm
+        if synthesis_llm is None:
+            return
+        provider_config = self.llm_providers.providers.get(synthesis_llm.provider)
+        if provider_config is None:
+            raise checks.InvalidConfigurationError(
+                f"synthesis_llm specifies an unknown provider {synthesis_llm.provider}"
+            )
+        if synthesis_llm.model not in provider_config.models:
+            raise checks.InvalidConfigurationError(
+                f"synthesis_llm specifies an unknown model {synthesis_llm.model}"
+            )
+
     def _validate_mcp_servers(self) -> None:
         """Validate MCP servers with auth module context.
 
@@ -1706,3 +1742,4 @@ class Config(BaseModel):
         self.llm_providers.validate_yaml()
         self.ols_config.validate_yaml(self.dev_config.disable_tls)
         self._validate_default_provider_and_model()
+        self._validate_synthesis_llm()

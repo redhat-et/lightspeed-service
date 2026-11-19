@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import ToolMessage
 from langchain_core.messages.ai import AIMessageChunk
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools.structured import StructuredTool
 from opentelemetry.trace import SpanKind
 from pydantic import BaseModel
@@ -27,6 +28,7 @@ from ols.src.query_helpers.llm_execution_agent import (  # noqa: E402
     FINAL_SYNTHESIS_INSTRUCTION,
     LLMExecutionAgent,
     RoundLLMResult,
+    SynthesisModel,
     _copy_prompt_template,
     _FinalAnswerToolCallGuard,
 )
@@ -2888,3 +2890,251 @@ async def test_invoke_llm_observes_duration_histogram():
     after = [s for s in labeled._samples() if s.name.endswith("_count")]
     count_after = after[0].value if after else 0.0
     assert count_after - count_before == 1
+
+
+class _RecordingLLM(MockLLMLoader):
+    """Mock model that records how many times it was streamed."""
+
+    def __init__(self, label: str) -> None:
+        """Store a label and zero the call counter."""
+        super().__init__()
+        self.label = label
+        self.stream_calls = 0
+
+    async def astream(self, *args, **kwargs):
+        """Count the call, then stream like the parent mock."""
+        self.stream_calls += 1
+        async for chunk in super().astream(*args, **kwargs):
+            yield chunk
+
+
+def _synthesis_model(llm: object, provider_type: str) -> SynthesisModel:
+    """Build a SynthesisModel for tests."""
+    return SynthesisModel(
+        llm=llm,
+        provider="synthesis_provider",
+        provider_type=provider_type,
+        model="synthesis_model",
+    )
+
+
+def test_answer_model_selects_synthesis_only_on_final_round() -> None:
+    """The synthesis model serves final rounds only."""
+    primary = MockLLMLoader()
+    synthesis = MockLLMLoader()
+    agent = _make_agent(
+        bare_llm=primary, synthesis_model=_synthesis_model(synthesis, "s_type")
+    )
+
+    off_final = agent._answer_model(is_final_round=False)
+    on_final = agent._answer_model(is_final_round=True)
+
+    assert off_final.llm is primary
+    assert off_final.model == "mock_model"
+    assert on_final.llm is synthesis
+    assert on_final.provider_type == "s_type"
+
+
+def test_answer_model_without_synthesis_keeps_primary_on_final_round() -> None:
+    """Without a synthesis model the primary model serves every round."""
+    primary = MockLLMLoader()
+    agent = _make_agent(bare_llm=primary)
+
+    assert agent._answer_model(is_final_round=True).llm is primary
+
+
+@pytest.mark.asyncio
+async def test_invoke_llm_streams_from_synthesis_model_on_final_round() -> None:
+    """The final round is streamed by the synthesis model, not the primary."""
+    primary = _RecordingLLM("primary")
+    synthesis = _RecordingLLM("synthesis")
+    agent = _make_agent(
+        bare_llm=primary, synthesis_model=_synthesis_model(synthesis, "s_type")
+    )
+    from langchain_core.prompts import ChatPromptTemplate
+
+    messages = ChatPromptTemplate.from_messages(
+        [("system", "test"), ("human", "{query}")]
+    )
+
+    chunks = [
+        chunk
+        async for chunk in agent._invoke_llm(
+            messages=messages,
+            llm_input_values={"query": "hello"},
+            tools_map=[],
+            is_final_round=True,
+            token_counter=MagicMock(),
+        )
+    ]
+
+    assert chunks
+    assert synthesis.stream_calls == 1
+    assert primary.stream_calls == 0
+
+
+def test_prepare_round_request_forces_synthesis_with_synthesis_model() -> None:
+    """A configured synthesis model unbinds tools even for providers that keep them."""
+    agent = _make_agent(
+        provider_type=constants.PROVIDER_OPENAI,
+        synthesis_model=_synthesis_model(MockLLMLoader(), constants.PROVIDER_OPENAI),
+    )
+    messages = ChatPromptTemplate.from_messages([("system", "test")])
+
+    result = agent._prepare_round_request(messages, mock_tools_map, is_final_round=True)
+
+    assert result is not None
+    _, round_tools, synthesize = result
+    assert synthesize is True
+    assert round_tools == []
+
+
+def test_prepare_round_request_unchanged_for_single_model() -> None:
+    """Providers outside the stripping set still keep tools without a synthesis model."""
+    agent = _make_agent(provider_type=constants.PROVIDER_OPENAI)
+    messages = ChatPromptTemplate.from_messages([("system", "test")])
+
+    result = agent._prepare_round_request(messages, mock_tools_map, is_final_round=True)
+
+    assert result is not None
+    _, round_tools, synthesize = result
+    assert synthesize is False
+    assert round_tools == mock_tools_map
+
+
+class _FailingLLM(MockLLMLoader):
+    """Mock model whose stream fails before emitting anything."""
+
+    def __init__(self, message: str = "gateway unavailable") -> None:
+        """Store the failure message and zero the call counter."""
+        super().__init__()
+        self.message = message
+        self.stream_calls = 0
+
+    async def astream(self, *args: object, **kwargs: object):
+        """Raise before yielding, like an unreachable external gateway."""
+        self.stream_calls += 1
+        raise RuntimeError(self.message)
+        yield  # pragma: no cover - unreachable, keeps this a generator
+
+
+class _SilentLLM(MockLLMLoader):
+    """Mock model that streams no chunks at all."""
+
+    def __init__(self) -> None:
+        """Zero the call counter."""
+        super().__init__()
+        self.stream_calls = 0
+
+    async def astream(self, *args: object, **kwargs: object):
+        """Yield nothing, like an empty external response."""
+        self.stream_calls += 1
+        return
+        yield  # pragma: no cover - unreachable, keeps this a generator
+
+
+class _PartialThenFailingLLM(MockLLMLoader):
+    """Mock model that emits one chunk and then fails."""
+
+    def __init__(self) -> None:
+        """Zero the call counter."""
+        super().__init__()
+        self.stream_calls = 0
+
+    async def astream(self, *args: object, **kwargs: object):
+        """Emit one chunk, then fail mid-stream."""
+        self.stream_calls += 1
+        yield AIMessageChunk(content="partial")
+        raise RuntimeError("connection reset")
+
+
+async def _collect(agent: LLMExecutionAgent, is_final_round: bool = True) -> list:
+    """Collect the chunks of one _invoke_llm round."""
+    messages = ChatPromptTemplate.from_messages(
+        [("system", "test"), ("human", "{query}")]
+    )
+    return [
+        chunk
+        async for chunk in agent._invoke_llm(
+            messages=messages,
+            llm_input_values={"query": "hello"},
+            tools_map=[],
+            is_final_round=is_final_round,
+            token_counter=MagicMock(),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_invoke_llm_falls_back_when_synthesis_model_fails() -> None:
+    """A synthesis failure before output is served by the primary model."""
+    primary = _RecordingLLM("primary")
+    synthesis = _FailingLLM()
+    agent = _make_agent(
+        bare_llm=primary, synthesis_model=_synthesis_model(synthesis, "s_type")
+    )
+
+    chunks = await _collect(agent)
+
+    assert chunks
+    assert synthesis.stream_calls == 1
+    assert primary.stream_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_invoke_llm_falls_back_when_synthesis_model_is_silent() -> None:
+    """An empty synthesis response is served by the primary model."""
+    primary = _RecordingLLM("primary")
+    synthesis = _SilentLLM()
+    agent = _make_agent(
+        bare_llm=primary, synthesis_model=_synthesis_model(synthesis, "s_type")
+    )
+
+    chunks = await _collect(agent)
+
+    assert chunks
+    assert synthesis.stream_calls == 1
+    assert primary.stream_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_invoke_llm_propagates_failure_after_text_was_streamed() -> None:
+    """A synthesis failure after output cannot be retracted, so it propagates."""
+    primary = _RecordingLLM("primary")
+    synthesis = _PartialThenFailingLLM()
+    agent = _make_agent(
+        bare_llm=primary, synthesis_model=_synthesis_model(synthesis, "s_type")
+    )
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        await _collect(agent)
+
+    assert primary.stream_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_invoke_llm_propagates_primary_failure_without_synthesis() -> None:
+    """Without a synthesis model there is nothing to fall back to."""
+    primary = _FailingLLM()
+    agent = _make_agent(bare_llm=primary)
+
+    with pytest.raises(RuntimeError, match="gateway unavailable"):
+        await _collect(agent)
+
+    assert primary.stream_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_invoke_llm_does_not_fall_back_on_tool_rounds() -> None:
+    """A tool round is served by the primary model, never the synthesis model."""
+    primary = _RecordingLLM("primary")
+    synthesis = _FailingLLM()
+    agent = _make_agent(
+        bare_llm=primary, synthesis_model=_synthesis_model(synthesis, "s_type")
+    )
+
+    chunks = await _collect(agent, is_final_round=False)
+
+    assert chunks
+    assert synthesis.stream_calls == 0
+    assert primary.stream_calls == 1

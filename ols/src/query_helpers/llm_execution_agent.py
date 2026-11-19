@@ -123,6 +123,21 @@ class RoundLLMResult:
     answer_suppressed: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class SynthesisModel:
+    """A model and the request rules that apply to it.
+
+    Carries the provider details the round logic needs (tool-stripping and
+    tool_choice rules) alongside the loaded LLM, so a round served by a
+    provider other than the tool rounds' own is still handled correctly.
+    """
+
+    llm: BaseChatModel
+    provider: str
+    provider_type: str
+    model: str
+
+
 def skip_special_chunk(
     chunk_text: str,
     chunk_counter: int,
@@ -286,6 +301,7 @@ class LLMExecutionAgent:
         audit_ctx: Optional[AuditContext] = None,
         tool_result_classifier: ToolResultClassifier | None = None,
         tool_call_round_timeout: int | None = None,
+        synthesis_model: SynthesisModel | None = None,
     ) -> None:
         """Initialize the tool calling agent.
 
@@ -301,6 +317,8 @@ class LLMExecutionAgent:
             tool_result_classifier: Optional classifier for model-visible tool results.
             tool_call_round_timeout: Optional per-round timeout in seconds. Falls
                 back to ``constants.TOOL_CALL_ROUND_TIMEOUT`` when unset.
+            synthesis_model: Optional model that writes the final answer instead
+                of ``bare_llm``. Tool rounds always stay on ``bare_llm``.
         """
         self.bare_llm = bare_llm
         self.model = model
@@ -312,6 +330,27 @@ class LLMExecutionAgent:
         self._audit_ctx = audit_ctx
         self._tool_result_classifier = tool_result_classifier
         self._tool_call_round_timeout = tool_call_round_timeout
+        self.synthesis_model = synthesis_model
+
+    def _answer_model(self, is_final_round: bool) -> SynthesisModel:
+        """Return the model and provider rules that serve this round.
+
+        Args:
+            is_final_round: Whether this round writes the answer rather than
+                calling tools.
+
+        Returns:
+            The synthesis model on a final round when one is configured,
+            otherwise the primary model.
+        """
+        if is_final_round and self.synthesis_model is not None:
+            return self.synthesis_model
+        return SynthesisModel(
+            llm=self.bare_llm,
+            provider=self.provider,
+            provider_type=self.provider_type,
+            model=self.model,
+        )
 
     async def execute(
         self,
@@ -466,8 +505,15 @@ class LLMExecutionAgent:
         if not is_final_round or not all_mcp_tools:
             return messages, all_mcp_tools, False
 
-        synthesize = force_synthesis or (
-            self.provider_type in _FINAL_ROUND_TOOL_STRIPPING_PROVIDERS
+        answer_model = self._answer_model(is_final_round)
+        # A configured synthesis model answers by definition, so the final round
+        # is always a synthesis round: tools unbound and the synthesis
+        # instruction injected. Provider-based stripping still governs the
+        # single-model case.
+        synthesize = (
+            force_synthesis
+            or self.synthesis_model is not None
+            or answer_model.provider_type in _FINAL_ROUND_TOOL_STRIPPING_PROVIDERS
         )
         instruction_tokens = self._tracker.count_tokens(FINAL_SYNTHESIS_INSTRUCTION)
         if instruction_tokens > self._tracker.remaining:
@@ -642,6 +688,12 @@ class LLMExecutionAgent:
     ) -> AsyncGenerator[AIMessageChunk, None]:
         """Invoke the LLM with optional tools.
 
+        A configured synthesis model is an external dependency, so a synthesis
+        round falls back to the primary model when the synthesis model fails
+        before emitting any output, or emits no output at all. Text already
+        yielded to the caller cannot be retracted, so a failure after the first
+        chunk still propagates.
+
         Args:
             messages: The prompt template with messages
             llm_input_values: Input values for the prompt
@@ -653,29 +705,103 @@ class LLMExecutionAgent:
             AIMessageChunk objects from the LLM response stream
         """
         logger.debug("provided %s tools", len(tools_map))
+        answer_model = self._answer_model(is_final_round)
+        synthesis_round = is_final_round and self.synthesis_model is not None
+        emitted = False
+        try:
+            async for chunk in self._stream_from_model(
+                answer_model,
+                messages,
+                llm_input_values,
+                tools_map,
+                is_final_round,
+                token_counter,
+            ):
+                emitted = True
+                yield chunk
+        except Exception:
+            if not synthesis_round or emitted:
+                raise
+            logger.warning(
+                "Synthesis model %s/%s failed before emitting output; "
+                "falling back to %s/%s",
+                answer_model.provider,
+                answer_model.model,
+                self.provider,
+                self.model,
+            )
+        else:
+            if emitted or not synthesis_round:
+                return
+            logger.warning(
+                "Synthesis model %s/%s returned no output; falling back to %s/%s",
+                answer_model.provider,
+                answer_model.model,
+                self.provider,
+                self.model,
+            )
+
+        primary = SynthesisModel(
+            llm=self.bare_llm,
+            provider=self.provider,
+            provider_type=self.provider_type,
+            model=self.model,
+        )
+        async for chunk in self._stream_from_model(
+            primary,
+            messages,
+            llm_input_values,
+            tools_map,
+            is_final_round,
+            token_counter,
+        ):
+            yield chunk
+
+    async def _stream_from_model(
+        self,
+        answer_model: SynthesisModel,
+        messages: ChatPromptTemplate,
+        llm_input_values: dict[str, str],
+        tools_map: list[StructuredTool],
+        is_final_round: bool,
+        token_counter: GenericTokenCounter,
+    ) -> AsyncGenerator[AIMessageChunk, None]:
+        """Stream one round from a specific model, with its bind and metrics rules.
+
+        Args:
+            answer_model: The model serving this round, with its provider rules.
+            messages: The prompt template with messages.
+            llm_input_values: Input values for the prompt.
+            tools_map: Tools available for this round.
+            is_final_round: Whether this round writes the answer.
+            token_counter: Counter for tracking token usage.
+
+        Yields:
+            AIMessageChunk objects from the model's response stream.
+        """
         # strict=False is a ChatOpenAI-specific workaround for
         # langchain-ai/langchain#35837 (Responses API defaults strict=True).
         # Passing it to non-OpenAI providers (e.g. ChatAnthropicVertex) causes
         # the kwarg to leak into the underlying SDK call which rejects it.
         strict_kwargs: dict[str, Any] = (
-            {"strict": False} if isinstance(self.bare_llm, ChatOpenAI) else {}
+            {"strict": False} if isinstance(answer_model.llm, ChatOpenAI) else {}
         )
         if not tools_map:
-            llm = self.bare_llm
+            llm = answer_model.llm
         elif is_final_round:
             # Responses API dumps tool args as text when tools are unbound;
             # tool_choice="none" prevents this.
             tool_choice: str | dict[str, str] = "none"
-            if self.provider_type in (
+            if answer_model.provider_type in (
                 constants.PROVIDER_ANTHROPIC,
                 constants.PROVIDER_GOOGLE_VERTEX_ANTHROPIC,
             ):
                 tool_choice = {"type": "none"}
-            llm = self.bare_llm.bind_tools(
+            llm = answer_model.llm.bind_tools(
                 tools_map, tool_choice=tool_choice, **strict_kwargs
             )  # type: ignore [assignment]
         else:
-            llm = self.bare_llm.bind_tools(tools_map, **strict_kwargs)  # type: ignore [assignment]
+            llm = answer_model.llm.bind_tools(tools_map, **strict_kwargs)  # type: ignore [assignment]
 
         # create and execute the chain
         chain = messages | llm
@@ -689,23 +815,23 @@ class LLMExecutionAgent:
         except Exception:
             logger.error(
                 "LLM invocation failed: provider=%s, model=%s, elapsed=%.2fs",
-                self.provider,
-                self.model,
+                answer_model.provider,
+                answer_model.model,
                 time.monotonic() - llm_start_time,
             )
             raise
         else:
             logger.debug(
                 "LLM invocation completed: provider=%s, model=%s, elapsed=%.2fs",
-                self.provider,
-                self.model,
+                answer_model.provider,
+                answer_model.model,
                 time.monotonic() - llm_start_time,
             )
         finally:
             elapsed = time.monotonic() - llm_start_time
             gen_ai_client_operation_duration_seconds.labels(
-                gen_ai_request_model=self.model,
-                gen_ai_provider_name=self.provider_type,
+                gen_ai_request_model=answer_model.model,
+                gen_ai_provider_name=answer_model.provider_type,
                 gen_ai_operation_name="chat",
             ).observe(elapsed)
 

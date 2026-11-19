@@ -31,7 +31,7 @@ writer: the same model generates every round, it is just reached over a differen
 ## What you need
 
 1. An image built from this branch (the config keys in the spec are only read by
-   this code), running with the model pool below.
+   this code), running with pre-retrieval enabled and remote embeddings configured.
 2. The OpenShift documentation index in Solr and an embedding endpoint serving the
    checkpoint the index was built with (`granite-embedding-small-english-r2` for
    the published runs). If the embedder and the index disagree the vectors are

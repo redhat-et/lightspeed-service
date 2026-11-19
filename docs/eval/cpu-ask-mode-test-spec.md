@@ -7,6 +7,7 @@ this branch ships:
 - `ols_config.embed_model` — remote embedding backends for RAG (vLLM pooling runner or TEI)
 - `solr_hybrid.pre_retrieval` — retrieve documentation before the first LLM call
 - `ols_config.synthesis_llm` — optional separate model for the final answer round
+  (carried by `gold-gpu-ask-mode` only; `gold-cpu-ask-mode` does not include it)
 
 It is a methodology spec, not a results report. Run it on your own hardware and quote
 your own numbers.

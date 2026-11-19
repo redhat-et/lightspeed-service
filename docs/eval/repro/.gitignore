@@ -1,0 +1,3 @@
+# Rendered configs embed the judge key through environment: OPENAI_API_KEY.
+judges.env
+system_panel3.yaml

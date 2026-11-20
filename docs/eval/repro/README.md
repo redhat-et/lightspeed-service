@@ -41,8 +41,8 @@ answer. Only `gold-hybrid-ask-mode` carries that feature.
 3. A provider entry in `olsconfig.yaml` for the writer. For the CPU arm it is your
    CPU model; for the GPU arm it is an `openai`-type provider pointed at your GPU
    endpoint. The harness selects it per request, so the app default can stay on
-   the CPU model. The published GPU run used GLM-5.3 as the whole-request writer
-   with `solr_hybrid.pre_retrieval: true`. The hybrid arm is the exception: the
+   the CPU model. The published arm points it at a large hosted model that writes
+   the whole answer, with `solr_hybrid.pre_retrieval: true`. The hybrid arm is the exception: the
    request still names the CPU model, and the writer is chosen server-side by
    `ols_config.synthesis_llm`.
 4. A judge endpoint reachable over an OpenAI-compatible API, with three models.
